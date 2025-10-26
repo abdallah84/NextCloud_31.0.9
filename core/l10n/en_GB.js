@@ -270,6 +270,8 @@ OC.L10N.register(
     "Log in with a device" : "Log in with a device",
     "Login or email" : "Login or email",
     "Your account is not setup for passwordless login." : "Your account is not setup for passwordless login.",
+    "Passwordless login is only available for existing enabled accounts." : "Passwordless login is only available for existing enabled accounts.",
+    "Passwordless login requires two-factor authentication." : "Passwordless login requires two-factor authentication.",
     "Your connection is not secure" : "Your connection is not secure",
     "Passwordless authentication is only available over a secure connection." : "Passwordless authentication is only available over a secure connection.",
     "Browser not supported" : "Browser not supported",

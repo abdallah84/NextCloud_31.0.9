@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace OC\Authentication\Login;
 
 use OC\Core\Controller\LoginController;
+use OCP\IUser;
 use OCP\IUserManager;
 use Psr\Log\LoggerInterface;
 
@@ -25,8 +26,15 @@ class UserDisabledCheckCommand extends ALoginCommand {
 		$this->logger = $logger;
 	}
 
-	public function process(LoginData $loginData): LoginResult {
-		$user = $this->userManager->get($loginData->getUsername());
+        public function process(LoginData $loginData): LoginResult {
+                $user = $loginData->getUser();
+                if ($user === null) {
+                        $user = $this->userManager->get($loginData->getUsername());
+                }
+
+                if ($user !== null && !($user instanceof IUser)) {
+                        $user = null;
+                }
 		if ($user !== null && $user->isEnabled() === false) {
 			$username = $loginData->getUsername();
 			$ip = $loginData->getRequest()->getRemoteAddress();

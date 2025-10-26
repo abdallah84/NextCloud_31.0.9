@@ -11,6 +11,7 @@ namespace OC\Core\Controller;
 
 use OC\AppFramework\Http\Request;
 use OC\Authentication\Login\Chain;
+use OC\Authentication\Login\UsernameOnlyChain;
 use OC\Authentication\Login\LoginData;
 use OC\Authentication\WebAuthn\Manager as WebAuthnManager;
 use OC\User\Session;
@@ -48,9 +49,11 @@ use OCP\Util;
 
 class LoginController extends Controller {
 	public const LOGIN_MSG_INVALIDPASSWORD = 'invalidpassword';
-	public const LOGIN_MSG_USERDISABLED = 'userdisabled';
-	public const LOGIN_MSG_CSRFCHECKFAILED = 'csrfCheckFailed';
-	public const LOGIN_MSG_INVALID_ORIGIN = 'invalidOrigin';
+        public const LOGIN_MSG_USERDISABLED = 'userdisabled';
+        public const LOGIN_MSG_CSRFCHECKFAILED = 'csrfCheckFailed';
+        public const LOGIN_MSG_INVALID_ORIGIN = 'invalidOrigin';
+        public const LOGIN_MSG_USERNAMEONLY_ACCOUNT_UNAVAILABLE = 'usernameOnlyAccountUnavailable';
+        public const LOGIN_MSG_USERNAMEONLY_TWOFA_REQUIRED = 'usernameOnlyTwoFactorRequired';
 
 	public function __construct(
 		?string $appName,
@@ -353,11 +356,85 @@ class LoginController extends Controller {
 			);
 		}
 
-		if ($result->getRedirectUrl() !== null) {
-			return new RedirectResponse($result->getRedirectUrl());
-		}
-		return $this->generateRedirect($redirect_url);
-	}
+                if ($result->getRedirectUrl() !== null) {
+                        return new RedirectResponse($result->getRedirectUrl());
+                }
+                return $this->generateRedirect($redirect_url);
+        }
+
+        #[NoCSRFRequired]
+        #[PublicPage]
+        #[BruteForceProtection(action: 'login')]
+        #[UseSession]
+        #[OpenAPI(scope: OpenAPI::SCOPE_IGNORE)]
+        #[FrontpageRoute(verb: 'POST', url: '/login/username-only')]
+        public function tryUsernameOnlyLogin(
+                UsernameOnlyChain $usernameOnlyChain,
+                ITrustedDomainHelper $trustedDomainHelper,
+                string $user = '',
+                ?string $redirect_url = null,
+                string $timezone = '',
+                string $timezone_offset = '',
+        ): RedirectResponse {
+                $error = '';
+
+                $origin = $this->request->getHeader('Origin');
+                $throttle = true;
+                if ($origin === '' || !$trustedDomainHelper->isTrustedUrl($origin)) {
+                        $error = self::LOGIN_MSG_INVALID_ORIGIN;
+                        $throttle = false;
+                } elseif (!$this->request->passesCSRFCheck()) {
+                        if ($this->userSession->isLoggedIn()) {
+                                return $this->generateRedirect($redirect_url);
+                        }
+                        $error = self::LOGIN_MSG_CSRFCHECKFAILED;
+                }
+
+                if ($error !== '') {
+                        $this->userSession->logout();
+                        return $this->createLoginFailedResponse(
+                                $user,
+                                $user,
+                                $redirect_url,
+                                $error,
+                                $throttle,
+                        );
+                }
+
+                $user = trim($user);
+
+                if (strlen($user) > 255) {
+                        return $this->createLoginFailedResponse(
+                                $user,
+                                $user,
+                                $redirect_url,
+                                $this->l10n->t('Unsupported email length (>255)')
+                        );
+                }
+
+                $data = new LoginData(
+                        $this->request,
+                        $user,
+                        '',
+                        $redirect_url,
+                        $timezone,
+                        $timezone_offset
+                );
+                $result = $usernameOnlyChain->process($data);
+                if (!$result->isSuccess()) {
+                        return $this->createLoginFailedResponse(
+                                $data->getUsername(),
+                                $user,
+                                $redirect_url,
+                                $result->getErrorMessage()
+                        );
+                }
+
+                if ($result->getRedirectUrl() !== null) {
+                        return new RedirectResponse($result->getRedirectUrl());
+                }
+                return $this->generateRedirect($redirect_url);
+        }
 
 	/**
 	 * Creates a login failed response.
@@ -385,15 +462,23 @@ class LoginController extends Controller {
 		$response = new RedirectResponse(
 			$this->urlGenerator->linkToRoute('core.login.showLoginForm', $args)
 		);
-		if ($throttle) {
-			$response->throttle(['user' => substr($user, 0, 64)]);
-		}
-		$this->session->set('loginMessages', [
-			[$loginMessage], []
-		]);
+                if ($throttle) {
+                        $response->throttle(['user' => substr($user, 0, 64)]);
+                }
+                $this->session->set('loginMessages', [
+                        [$this->localizeLoginMessage($loginMessage)], []
+                ]);
 
-		return $response;
-	}
+                return $response;
+        }
+
+        private function localizeLoginMessage(string $loginMessage): string {
+                return match ($loginMessage) {
+                        self::LOGIN_MSG_USERNAMEONLY_ACCOUNT_UNAVAILABLE => $this->l10n->t('Passwordless login is only available for existing enabled accounts.'),
+                        self::LOGIN_MSG_USERNAMEONLY_TWOFA_REQUIRED => $this->l10n->t('Passwordless login requires two-factor authentication.'),
+                        default => $loginMessage,
+                };
+        }
 
 	/**
 	 * Confirm the user password
